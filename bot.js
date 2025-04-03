@@ -1,7 +1,7 @@
 const { ethers } = require('ethers');
 const fs = require('fs');
 const readline = require('readline');
-const chalk = require('chalk'); // Gunakan chalk@4 agar kompatibel dengan require()
+const chalk = require('chalk');
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -11,71 +11,69 @@ const rl = readline.createInterface({
 function showBanner() {
     console.log(chalk.cyan(`
     ***********************************************
-    ************ EVM Bulk Send v1.0.0 *************
+    ************ EVM Bulk Send v1.0.4 *************
     ***********************************************
-    Created by github.com/lizkyyy
+    Created by github.com/baihaqism
     ***********************************************
     `));
 }
 
 async function distributeEth(privateKeys, provider, addresses, amountPerAddress) {
-    try {
-        console.log(chalk.yellow('\n🔹 Starting direct transfer to target addresses...'));
+    console.log(chalk.yellow('\n🔹 Starting direct transfer to target addresses...\n'));
 
-        // Loop through each wallet and perform the transfers
-        for (let i = 0; i < privateKeys.length; i++) {
-            const wallet = new ethers.Wallet(privateKeys[i], provider);
-            console.log(chalk.cyan(`Using wallet ${wallet.address} for direct transfers.`));
+    for (let i = 0; i < privateKeys.length; i++) {
+        const wallet = new ethers.Wallet(privateKeys[i], provider);
+        const senderAddress = wallet.address;
 
-            // Iterate through target addresses
-            for (let j = 0; j < addresses.length; j++) {
-                try {
-                    if (!ethers.isAddress(addresses[j])) {
-                        console.log(chalk.red(`❌ Invalid address: ${addresses[j]}. Skipping...`));
-                        continue;
-                    }
+        console.log(chalk.cyan(`🔹 Using wallet ${senderAddress} for transfers.`));
 
-                    const balance = await provider.getBalance(wallet.address);
-                    const sendAmount = BigInt(ethers.parseEther(amountPerAddress.toString()));
-                    const gasEstimate = BigInt(ethers.parseEther("0.0001")); // Estimasi gas fee kecil
+        // Ambil nonce untuk wallet saat ini
+        let nonce = await provider.getTransactionCount(senderAddress, "latest");
 
-                    if (balance < (sendAmount + gasEstimate)) {
-                        console.log(chalk.red(`❌ Insufficient balance in ${wallet.address}. Skipping...`));
-                        continue;
-                    }
+        // Periksa saldo sebelum mulai transaksi
+        let balance = await provider.getBalance(senderAddress);
+        console.log(chalk.yellow(`🔹 Initial Balance: ${ethers.formatEther(balance)} ETH\n`));
 
-                    let gasLimit;
-                    try {
-                        gasLimit = await provider.estimateGas({
-                            to: addresses[j],
-                            value: sendAmount
-                        });
-                    } catch {
-                        gasLimit = 21000; // Default gas limit for simple transfers
-                    }
-
-                    const tx = await wallet.sendTransaction({
-                        to: addresses[j],
-                        value: sendAmount,
-                        gasLimit
-                    });
-
-                    console.log(chalk.green(`✅ Sent ${amountPerAddress} ETH from ${wallet.address} to ${addresses[j]}`));
-                    console.log(chalk.gray(`🔗 Transaction hash: ${tx.hash}`));
-
-                    await tx.wait(); // Wait for transaction to be mined
-                } catch (error) {
-                    console.log(chalk.red(`❌ Error sending to ${addresses[j]}: ${error.message}`));
+        for (let j = 0; j < addresses.length; j++) {
+            try {
+                if (!ethers.isAddress(addresses[j])) {
+                    console.log(chalk.red(`❌ Invalid address: ${addresses[j]}. Skipping...`));
                     continue;
                 }
+
+                balance = await provider.getBalance(senderAddress); // Update saldo terbaru
+                const sendAmount = ethers.parseEther(amountPerAddress.toString());
+                const gasPrice = await provider.getFeeData().then(feeData => feeData.gasPrice);
+                const estimatedGas = 21000n; // Gas untuk transaksi sederhana
+                const totalCost = sendAmount + (estimatedGas * gasPrice);
+
+                if (balance < totalCost) {
+                    console.log(chalk.red(`❌ Insufficient balance in ${senderAddress}. Skipping...`));
+                    continue;
+                }
+
+                const tx = await wallet.sendTransaction({
+                    to: addresses[j],
+                    value: sendAmount,
+                    gasLimit: estimatedGas,
+                    gasPrice,
+                    nonce
+                });
+
+                console.log(chalk.green(`✅ Sent ${amountPerAddress} ETH from ${senderAddress} to ${addresses[j]}`));
+                console.log(chalk.gray(`🔗 Transaction hash: ${tx.hash}\n`));
+
+                await tx.wait(); // Tunggu transaksi selesai
+                nonce++; // Tingkatkan nonce untuk transaksi berikutnya
+
+            } catch (error) {
+                console.log(chalk.red(`❌ Error sending from ${senderAddress} to ${addresses[j]}: ${error.message}\n`));
+                continue;
             }
         }
-
-        console.log(chalk.green('\n✅ All direct transfers complete!'));
-
-    } catch (error) {
-        console.log(chalk.red(`\n❌ Error: ${error.message}`));
     }
+
+    console.log(chalk.green('\n✅ All direct transfers complete!'));
 }
 
 async function main() {
@@ -83,14 +81,14 @@ async function main() {
     showBanner();
 
     try {
-        // Ask user for RPC URL
+        // Minta inputan RPC URL
         const rpcUrl = await new Promise((resolve) => {
             rl.question(chalk.green('\n🔹 Enter RPC URL: '), resolve);
         });
 
         const provider = new ethers.JsonRpcProvider(rpcUrl);
 
-        // Read private keys from wallet.txt
+        // Baca private keys dari wallet.txt
         const privateKeys = fs.readFileSync('wallet.txt', 'utf8')
             .split('\n')
             .map(key => key.trim())
@@ -102,20 +100,20 @@ async function main() {
 
         console.log(chalk.cyan(`\n🔹 Found ${privateKeys.length} private keys`));
 
-        // Check balance of each wallet
+        // Periksa saldo setiap wallet
         for (let i = 0; i < privateKeys.length; i++) {
             const wallet = new ethers.Wallet(privateKeys[i], provider);
             const balance = await provider.getBalance(wallet.address);
             console.log(chalk.yellow(`Wallet ${i + 1} address: ${wallet.address}`));
-            console.log(chalk.yellow(`Balance: ${ethers.formatEther(balance)} ETH`));
+            console.log(chalk.yellow(`Balance: ${ethers.formatEther(balance)} ETH\n`));
         }
 
-        // Ask user for the amount to send
+        // Minta jumlah ETH yang akan dikirim
         const amountPerAddress = await new Promise((resolve) => {
             rl.question(chalk.green('\n🔹 Enter ETH amount to send to each address: '), resolve);
         });
 
-        // Read target addresses from target_addresses.txt
+        // Baca target addresses dari target_addresses.txt
         const addresses = fs.readFileSync('target_addresses.txt', 'utf8')
             .split('\n')
             .map(addr => addr.trim())
@@ -127,7 +125,7 @@ async function main() {
 
         console.log(chalk.cyan(`\n🔹 Found ${addresses.length} valid target addresses`));
 
-        // Call the function to distribute ETH
+        // Distribusikan ETH
         await distributeEth(privateKeys, provider, addresses, parseFloat(amountPerAddress));
 
     } catch (error) {
